@@ -73,6 +73,9 @@ class MLPPolicy(BasePolicy, nn.Module, metaclass=abc.ABCMeta):
     def save(self, filepath):
         torch.save(self.state_dict(), filepath)
 
+    def restore(self, filepath):
+        self.load_state_dict(torch.load(filepath))
+
     ##################################
 
     def get_action(self, obs: np.ndarray) -> np.ndarray:
@@ -82,7 +85,8 @@ class MLPPolicy(BasePolicy, nn.Module, metaclass=abc.ABCMeta):
             observation = obs[None]
 
         # TODO return the action that the policy prescribes
-        raise NotImplementedError
+        action_distribution = self.forward(torch.tensor(observation, dtype=torch.float).to(ptu.device))
+        return ptu.to_numpy(action_distribution.sample())
 
     # update/train this policy
     def update(self, observations, actions, **kwargs):
@@ -93,8 +97,12 @@ class MLPPolicy(BasePolicy, nn.Module, metaclass=abc.ABCMeta):
     # through it. For example, you can return a torch.FloatTensor. You can also
     # return more flexible objects, such as a
     # `torch.distributions.Distribution` object. It's up to you!
-    def forward(self, observation: torch.FloatTensor) -> Any:
-        raise NotImplementedError
+    def forward(self, observation: torch.FloatTensor) -> distributions.Distribution:
+        if self.discrete:
+            return distributions.Categorical(logits=self.logits_na(observation))
+        
+        else:
+            return distributions.Normal(self.mean_net(observation), torch.exp(self.logstd)[None])
 
 
 #####################################################
@@ -110,7 +118,16 @@ class MLPPolicySL(MLPPolicy):
             adv_n=None, acs_labels_na=None, qvals=None
     ):
         # TODO: update the policy and return the loss
-        loss = TODO
+        observations = torch.tensor(observations, dtype=torch.float).to(ptu.device)
+        actions = torch.tensor(actions, dtype=torch.int if self.discrete else torch.float).to(ptu.device)
+
+        predicted_action_distribution = self.forward(observation=observations)
+        loss = -predicted_action_distribution.log_prob(actions).mean()
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
         return {
             # You can add extra logging information here, but keep this line
             'Training Loss': ptu.to_numpy(loss),
